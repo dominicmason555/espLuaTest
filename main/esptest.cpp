@@ -43,6 +43,81 @@ void *allocator(void *ud, void *ptr, size_t osize, size_t nsize) {
   }
 }
 
+ssize_t capture_fs_write(int fd, const void *data, size_t size) {
+  if (size > 1024) {
+    printf("Write too big\n");
+    return -1;
+  }
+  char buf[1024];
+  for (int i = 0; i < size; i++) {
+    buf[i] = ((char *)data)[i];
+  }
+  buf[size] = '\0';
+  printf("Writing %zu bytes to fd %d: %s\n", size, fd, buf);
+  return size;
+}
+
+ssize_t capture_fs_read(int fd, void *dst, size_t size) {
+  printf("Reading %zu bytes from fd %d\n", size, fd);
+  return size;
+}
+
+int capture_fs_open(const char *path, int flags, int mode) {
+  static int fd = 0;
+  fd++;
+  printf("Opening path %s, fd is %d\n", path, fd);
+  return fd;
+}
+
+int capture_fs_close(int fd) {
+  printf("Closing %d\n", fd);
+  return 0;
+}
+
+esp_vfs_t capture_fs = {
+  flags : ESP_VFS_FLAG_DEFAULT,
+  write : capture_fs_write, // Write function
+  lseek : nullptr,          // Not implemented
+  read : capture_fs_read,   // Read function
+  pread : nullptr,          // Not implemented
+  pwrite : nullptr,         // Not implemented
+  open : capture_fs_open,   // Open function
+  close : capture_fs_close, // Close function
+  fstat : nullptr,          // Below: not implemented
+  stat : nullptr,
+  link : nullptr,
+  unlink : nullptr,
+  rename : nullptr,
+  opendir : nullptr,
+  readdir : nullptr,
+  readdir_r : nullptr,
+  telldir : nullptr,
+  seekdir : nullptr,
+  closedir : nullptr,
+  mkdir : nullptr,
+  rmdir : nullptr,
+  fcntl : nullptr,
+  ioctl : nullptr,
+  fsync : nullptr,
+  access : nullptr,
+  truncate : nullptr,
+  ftruncate : nullptr,
+  utime : nullptr,
+  tcsetattr : nullptr,
+  tcgetattr : nullptr,
+  tcdrain : nullptr,
+  tcflush : nullptr,
+  tcflow : nullptr,
+  tcgetsid : nullptr,
+  tcsendbreak : nullptr,
+  start_select : nullptr,
+  socket_select : nullptr,
+  stop_socket_select : nullptr,
+  stop_socket_select_isr : nullptr,
+  get_socket_select_semaphore : nullptr,
+  end_select : nullptr
+};
+
 void superloop(void) {
   printf("Hello, World!\n");
   ta_init(LUA_MEM, LUA_MEM + LUA_MEM_SIZE - 1, 512, 16, 4);
@@ -65,6 +140,44 @@ void superloop(void) {
 
   printf("Num Free: %d, num used: %d, num fresh: %d\n", ta_num_free(),
          ta_num_used(), ta_num_fresh());
+
+  printf("========== C file handling\n");
+
+  printf("Creating virtual FS\n");
+  ESP_ERROR_CHECK(esp_vfs_register("/capture", &capture_fs, NULL));
+
+  printf("Opening file\n");
+  FILE *capture = fopen("/capture/file", "a+");
+  printf("Writing to file\n");
+  fputs("fputs to capture from C\n", capture);
+  printf("Reading from file\n");
+  uint8_t buf[10];
+  fread(buf, 1, 1, capture);
+  printf("Closing file\n");
+  fclose(capture);
+
+  printf("========== Lua file handling\n");
+
+  printf("Opening file from Lua\n");
+  res = luaL_dostring(L, "cap = io.open('/capture/lua_out', 'a+'); print(cap)");
+  if (res) {
+    printf("Lua error %d: %s\n", res, lua_tostring(L, -1));
+  }
+  printf("Setting the mode to line-buffered\n");
+  res = luaL_dostring(L, "cap:setvbuf('line', 1024)");
+  if (res) {
+    printf("Lua error %d: %s\n", res, lua_tostring(L, -1));
+  }
+  printf("Writing to file from Lua\n");
+  res = luaL_dostring(L, "print(cap:write('Writing to cap from Lua'))");
+  if (res) {
+    printf("Lua error %d: %s\n", res, lua_tostring(L, -1));
+  }
+  printf("Reading from file from Lua\n");
+  res = luaL_dostring(L, "print(cap:read(1))");
+  if (res) {
+    printf("Lua error %d: %s\n", res, lua_tostring(L, -1));
+  }
 
   printf("Entering REPL\n");
 
